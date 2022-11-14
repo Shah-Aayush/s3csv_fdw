@@ -64,18 +64,23 @@ class S3Fdw(ForeignDataWrapper):
 
     def __init__(self, fdw_options, fdw_columns):
         super(S3Fdw, self).__init__(fdw_options, fdw_columns)
+
         self.filename = fdw_options.get("filename")
-        if self.filename is None:
+        if self.filename is None or not self.filename:
             log_to_postgres("You must set filename", ERROR)
 
-
-        self.bucket = fdw_options.get('bucket', 
+        self.bucket = fdw_options.get('bucket',
                                       fdw_options.get('bucketname'))
-        if self.bucket is None:
+        if self.bucket is None or not self.bucket:
             log_to_postgres("You must set bucket", ERROR)
 
-        self.aws_access_key = fdw_options['aws_access_key']
-        self.aws_secret_key = fdw_options['aws_secret_key']
+        self.aws_access_key = fdw_options.get("aws_access_key")
+        if self.aws_access_key is None or not self.aws_access_key:
+            log_to_postgres("You must set aws_access_key", ERROR)
+
+        self.aws_secret_key = fdw_options.get("aws_secret_key")
+        if self.aws_secret_key is None or not self.aws_secret_key:
+            log_to_postgres("You must set aws_secret_key", ERROR)
 
         self.delimiter = fdw_options.get("delimiter", ",")
         self.quotechar = fdw_options.get("quotechar", 
