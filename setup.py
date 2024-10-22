@@ -7,10 +7,10 @@ def read(fname):
 setup(
     name='S3Fdw',
     version='0.3.0',
-    author='Alexander Goldstein',
-    author_email='alexg@eligoenergy.com',
+    author='Aayush Shah',
+    author_email='shahaayush349@gmail.com',
     packages=['s3fdw'],
-    url='https://github.com/eligoenergy/s3csv_fdw',
+    url='https://github.com/Shah-Aayush/hydradatabase-s3csv_fdw',
     license='LICENSE.txt',
     description='PostgreSQL Foreign Data Wrapper for Amazon S3 and S3-compatible storage',
     long_description=read('README.rst'),
