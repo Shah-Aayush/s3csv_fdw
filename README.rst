@@ -74,3 +74,26 @@ request here (https://github.com/Kozea/Multicorn/pull/49).  I just
 packaged it up.
 
 .. _dev360: https://github.com/dev360
+
+---
+
+# Custom options : 
+```sql
+CREATE FOREIGN TABLE s3_csv_data (
+    id INT,
+    name TEXT,
+    age INT
+)
+SERVER multicorn_s3 
+OPTIONS (
+    aws_access_key 'your_key',
+    aws_secret_key 'your_secret',
+    bucket 'your_bucket',
+    filename 'your_file.csv',
+    endpoint 'https://your-noobaa-endpoint',
+    verify_ssl 'false',
+    signature_version 's3v4',
+    addressing_style 'path',
+    region ''
+);
+```
