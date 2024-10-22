@@ -16,8 +16,7 @@ setup(
     long_description=read('README.rst'),
     install_requires=[
         "boto3>=1.26.0",
-        "botocore>=1.29.0",
-        "multicorn>=2.4.0"
+        "botocore>=1.29.0"
     ],
     classifiers=[
         "Development Status :: 4 - Beta",
