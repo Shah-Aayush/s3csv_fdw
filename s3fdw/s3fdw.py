@@ -4,10 +4,11 @@ An Amazon S3 Foreign Data Wrapper
 """
 from multicorn import ForeignDataWrapper
 from multicorn.utils import log_to_postgres, ERROR, WARNING, DEBUG
-
 import boto3
 import csv
 from io import BytesIO, TextIOWrapper
+from botocore.client import Config
+
 
 # In at least some cases, bucket names are required to follow subdomain.domain
 # format.
@@ -47,76 +48,142 @@ def _new_match_hostname(cert, hostname):
 ssl.match_hostname = _new_match_hostname
 
 class S3Fdw(ForeignDataWrapper):
-    """A foreign data wrapper for accessing csv files.
+    """A foreign data wrapper for accessing csv files from S3 or S3-compatible storage.
 
     Valid options:
-        - aws_access_key : AWS access keys
-        - aws_secret_key : AWS secret keys
-        - hostname : accepted but ignored
-        - bucket or bucketname : bucket in S3
-        - filename : full path to the csv file, which must be readable
-          with S3 credentials
-        - delimiter : the delimiter used between fields.
-          Default: ","
-        - quotechar or quote : quote separator
-        - skip_header or header: if integer, number of lines to skip, if true then 1, else 0
+        - aws_access_key: AWS access key
+        - aws_secret_key: AWS secret key
+        - bucket: S3 bucket name
+        - filename: path to the CSV file
+        - endpoint: Custom S3 endpoint URL (optional)
+        - region: AWS region (optional)
+        - verify_ssl: Verify SSL certificate (default: true)
+        - signature_version: S3 signature version (default: s3v4)
+        - addressing_style: S3 addressing style (path or virtual)
+        - delimiter: CSV delimiter (default: ",")
+        - quotechar: CSV quote character (default: '"')
+        - skip_header: Number of lines to skip, or boolean
     """
 
     def __init__(self, fdw_options, fdw_columns):
         super(S3Fdw, self).__init__(fdw_options, fdw_columns)
 
-        self.filename = fdw_options.get("filename")
-        if self.filename is None or not self.filename:
-            log_to_postgres("You must set filename", ERROR)
+        # Required options
+        self.validate_required_options(fdw_options)
+        
+        # S3 configuration
+        self.aws_access_key = fdw_options["aws_access_key"]
+        self.aws_secret_key = fdw_options["aws_secret_key"]
+        self.bucket = fdw_options.get('bucket', fdw_options.get('bucketname'))
+        self.filename = fdw_options["filename"]
+        
+        # S3 endpoint configuration
+        self.endpoint = fdw_options.get("endpoint")
+        self.region = fdw_options.get("region", "")
+        self.verify_ssl = self.parse_bool_option(fdw_options.get("verify_ssl", "true"))
+        self.signature_version = fdw_options.get("signature_version", "s3v4")
+        self.addressing_style = fdw_options.get("addressing_style", "path")
 
-        self.bucket = fdw_options.get('bucket',
-                                      fdw_options.get('bucketname'))
-        if self.bucket is None or not self.bucket:
-            log_to_postgres("You must set bucket", ERROR)
-
-        self.aws_access_key = fdw_options.get("aws_access_key")
-        if self.aws_access_key is None or not self.aws_access_key:
-            log_to_postgres("You must set aws_access_key", ERROR)
-
-        self.aws_secret_key = fdw_options.get("aws_secret_key")
-        if self.aws_secret_key is None or not self.aws_secret_key:
-            log_to_postgres("You must set aws_secret_key", ERROR)
-
+        # CSV configuration
         self.delimiter = fdw_options.get("delimiter", ",")
-        self.quotechar = fdw_options.get("quotechar", 
-                                         fdw_options.get("quote", '"'))
-        self.skip_header = int(fdw_options.get('skip_header') or 
-                               1 if fdw_options.get('header') in ('T', 'TRUE', 't', 'true') else 0)
+        self.quotechar = fdw_options.get("quotechar", fdw_options.get("quote", '"'))
+        self.skip_header = self.parse_header_option(fdw_options)
+        
         self.columns = fdw_columns
 
+    def validate_required_options(self, options):
+        """Validate required FDW options"""
+        required = ["aws_access_key", "aws_secret_key", "bucket", "filename"]
+        for opt in required:
+            if not options.get(opt):
+                log_to_postgres(f"Missing required option: {opt}", ERROR)
+
+    def parse_bool_option(self, value):
+        """Parse boolean option values"""
+        if isinstance(value, bool):
+            return value
+        return value.lower() in ('true', 't', 'yes', 'y', '1')
+
+    def parse_header_option(self, options):
+        """Parse header skip option"""
+        skip_header = options.get('skip_header')
+        if skip_header is not None:
+            return int(skip_header)
+        
+        header = options.get('header')
+        if header is not None:
+            return 1 if self.parse_bool_option(header) else 0
+        return 0
+
+    def get_s3_client(self):
+        """Create S3 client with proper configuration"""
+        try:
+            config = Config(
+                signature_version=self.signature_version,
+                s3={
+                    'addressing_style': self.addressing_style
+                }
+            )
+            
+            client_kwargs = {
+                'aws_access_key_id': self.aws_access_key,
+                'aws_secret_access_key': self.aws_secret_key,
+                'config': config
+            }
+
+            # Add optional configurations
+            if self.endpoint:
+                client_kwargs['endpoint_url'] = self.endpoint
+            if self.region:
+                client_kwargs['region_name'] = self.region
+            if not self.verify_ssl:
+                client_kwargs['verify'] = False
+
+            return boto3.client('s3', **client_kwargs)
+            
+        except Exception as e:
+            log_to_postgres(f"Failed to create S3 client: {str(e)}", ERROR)
+            raise
+
     def execute(self, quals, columns):
-        s3 = boto3.client(
-            's3',
-            aws_access_key_id=self.aws_access_key,
-            aws_secret_access_key=self.aws_secret_key
-        )
+        try:
+            s3 = self.get_s3_client()
+            
+            stream = BytesIO()
+            try:
+                s3.download_fileobj(self.bucket, self.filename, stream)
+            except Exception as e:
+                log_to_postgres(f"Failed to download file {self.filename} from bucket {self.bucket}: {str(e)}", ERROR)
+                raise
+            
+            stream.seek(0)
+            reader = csv.reader(
+                TextIOWrapper(stream, encoding='utf-8'),
+                delimiter=self.delimiter,
+                quotechar=self.quotechar
+            )
 
-        stream = BytesIO()
-        s3.download_fileobj(self.bucket, self.filename, stream)
-        stream.seek(0)
+            count = 0
+            checked = False
+            
+            for line in reader:
+                if count >= self.skip_header:
+                    if not checked:
+                        checked = True
+                        self.validate_columns(line)
+                    
+                    row = line[:len(self.columns)]
+                    nulled_row = [v if v else None for v in row]
+                    yield nulled_row
+                count += 1
 
-        reader = csv.reader(TextIOWrapper(stream, encoding='utf-8'), delimiter=self.delimiter, quotechar=self.quotechar)
-        count = 0
-        checked = False
-        for line in reader:
-            if count >= self.skip_header:
-                if not checked:
-                    # On first iteration, check if the lines are of the
-                    # appropriate length
-                    checked = True
-                    if len(line) > len(self.columns):
-                        log_to_postgres("There are more columns than "
-                                        "defined in the table", WARNING)
-                    if len(line) < len(self.columns):
-                        log_to_postgres("There are less columns than "
-                                        "defined in the table", WARNING)
-                row=line[:len(self.columns)]
-                nulled_row = [v if v else None for v in row]
-                yield nulled_row
-            count += 1
+        except Exception as e:
+            log_to_postgres(f"Error reading CSV data: {str(e)}", ERROR)
+            raise
 
+    def validate_columns(self, line):
+        """Validate CSV columns against table definition"""
+        if len(line) > len(self.columns):
+            log_to_postgres("CSV file has more columns than defined in the table", WARNING)
+        if len(line) < len(self.columns):
+            log_to_postgres("CSV file has fewer columns than defined in the table", WARNING)
