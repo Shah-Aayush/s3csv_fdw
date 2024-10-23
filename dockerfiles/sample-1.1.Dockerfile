@@ -1,6 +1,7 @@
 ARG PGVERSION=15
 
 # Use the Hydra base image
+# FROM postgres:15
 FROM ghcr.io/hydradatabase/hydra:15
 
 USER root
@@ -20,7 +21,10 @@ RUN git clone --branch enhanced https://github.com/Shah-Aayush/hydradatabase-s3c
 WORKDIR /tmp/s3fdw
 
 # Install S3 FDW
-RUN pip3 install --break-system-packages -e .  
+RUN pip3 install --break-system-packages -e .
+
+# Set PYTHONPATH to include the path where s3fdw is installed
+ENV PYTHONPATH="/usr/local/lib/python3.11/dist-packages:/tmp/s3fdw:$PYTHONPATH"
 
 # Download and install pg_profile extension
 RUN wget https://github.com/zubkov-andrei/pg_profile/releases/download/4.6/pg_profile--4.6.tar.gz -O /tmp/pg_profile.tar.gz && \
@@ -50,8 +54,5 @@ RUN echo "CREATE EXTENSION IF NOT EXISTS plpython3u;" >> /docker-entrypoint-init
 RUN echo "shared_preload_libraries = 'pg_stat_statements,pg_cron'" >> /usr/share/postgresql/15/postgresql.conf.sample && \
     echo "cron.database_name = 'postgres'" >> /usr/share/postgresql/15/postgresql.conf.sample
 
-# Clean up
-RUN apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 EXPOSE 5432

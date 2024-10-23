@@ -7,13 +7,14 @@ def read(fname):
 setup(
     name='S3Fdw',
     version='0.3.0',
-    author='Aayush Shah',
-    author_email='shahaayush349@gmail.com',
+    author='Alexander Goldstein',
+    author_email='alexg@eligoenergy.com',
     packages=['s3fdw'],
-    url='https://github.com/Shah-Aayush/hydradatabase-s3csv_fdw',
+    url='https://github.com/Shah-Aayush/s3csv_fdw',
     license='LICENSE.txt',
     description='PostgreSQL Foreign Data Wrapper for Amazon S3 and S3-compatible storage',
-    long_description=read('README.rst'),
+    long_description=read('README.md'),
+    long_description_content_type='text/markdown',
     install_requires=[
         "boto3>=1.26.0",
         "botocore>=1.29.0"
