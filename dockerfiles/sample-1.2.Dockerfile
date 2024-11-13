@@ -19,7 +19,7 @@ RUN cd /tmp/multicorn && \
     make install
 
 # Clone the repository
-RUN git clone --branch enhanced https://github.com/Shah-Aayush/hydradatabase-s3csv_fdw.git /tmp/s3fdw
+RUN git clone --branch master https://github.com/Shah-Aayush/s3csv_fdw.git /tmp/s3fdw
 
 # Set the working directory
 WORKDIR /tmp/s3fdw
