@@ -165,6 +165,7 @@ class S3Fdw(ForeignDataWrapper):
 
             count = 0
             checked = False
+            bad_rows = []
             
             for line in reader:
                 if count >= self.skip_header:
@@ -172,14 +173,44 @@ class S3Fdw(ForeignDataWrapper):
                         checked = True
                         self.validate_columns(line)
                     
+                    # Validate the current row
+                    if len(line) < len(self.columns):
+                        log_to_postgres(f"Corrupted row found: {line}", WARNING)
+                        bad_rows.append(line)  # Add corrupted row to bad_rows
+                        continue  # Skip this row
+
+                    # Prepare the valid row
                     row = line[:len(self.columns)]
                     nulled_row = [v if v else None for v in row]
-                    yield nulled_row
+                    yield nulled_row  # Return valid rows to PostgreSQL
                 count += 1
+
+            # Handle bad rows
+            if bad_rows:
+                self.write_bad_file(bad_rows)
 
         except Exception as e:
             log_to_postgres(f"Error reading CSV data: {str(e)}", ERROR)
             raise
+
+    def write_bad_file(self, bad_rows):
+        """Write bad rows to a .bad file and upload it to S3."""
+        bad_filename = f"{self.filename}.bad"
+        bad_stream = BytesIO()
+        writer = csv.writer(
+            TextIOWrapper(bad_stream, encoding='utf-8'),
+            delimiter=self.delimiter,
+            quotechar=self.quotechar
+        )
+        writer.writerows(bad_rows)
+        bad_stream.seek(0)
+
+        try:
+            s3 = self.get_s3_client()
+            s3.upload_fileobj(bad_stream, self.bucket, bad_filename)
+            log_to_postgres(f"Bad rows written to {bad_filename} and uploaded to S3", DEBUG)
+        except Exception as e:
+            log_to_postgres(f"Failed to upload .bad file to S3: {str(e)}", ERROR)
 
     def validate_columns(self, line):
         """Validate CSV columns against table definition"""
