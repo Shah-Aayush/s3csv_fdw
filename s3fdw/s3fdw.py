@@ -65,6 +65,7 @@ class S3Fdw(ForeignDataWrapper):
         - delimiter: CSV delimiter (default: ",")
         - quotechar: CSV quote character (default: '"')
         - skip_header: Number of lines to skip, or boolean
+        - generate_bad_file: Whether to generate a .bad file for corrupted rows (default: true)
     """
 
     def __init__(self, fdw_options, fdw_columns):
@@ -90,6 +91,8 @@ class S3Fdw(ForeignDataWrapper):
         self.delimiter = fdw_options.get("delimiter", ",")
         self.quotechar = fdw_options.get("quotechar", fdw_options.get("quote", '"'))
         self.skip_header = self.parse_header_option(fdw_options)
+        
+        self.generate_bad_file = self.parse_bool_option(fdw_options.get("generate_bad_file", "true"))
         
         self.columns = fdw_columns
 
@@ -167,7 +170,7 @@ class S3Fdw(ForeignDataWrapper):
 
             count = 0
             checked = False
-            bad_rows = []
+            bad_rows = []  # Store bad rows only if generate_bad_file is true
             
             for line in reader:
                 if count >= self.skip_header:
@@ -178,7 +181,8 @@ class S3Fdw(ForeignDataWrapper):
                     # Validate the current row
                     if len(line) < len(self.columns):
                         log_to_postgres(f"Corrupted row found: {line}", WARNING)
-                        bad_rows.append(line)  # Add corrupted row to bad_rows
+                        if self.generate_bad_file:  # Only store bad rows if this option is enabled
+                            bad_rows.append(line)
                         continue  # Skip this row
 
                     # Prepare the valid row
@@ -188,12 +192,13 @@ class S3Fdw(ForeignDataWrapper):
                 count += 1
 
             # Handle bad rows
-            if bad_rows:
+            if self.generate_bad_file and bad_rows:
                 self.write_bad_file(bad_rows)
 
         except Exception as e:
             log_to_postgres(f"Error reading CSV data: {str(e)}", ERROR)
             raise
+
 
     def write_bad_file(self, bad_rows):
         """Write bad rows to a .bad file and upload it to S3."""
