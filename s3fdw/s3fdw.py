@@ -66,6 +66,9 @@ class S3Fdw(ForeignDataWrapper):
         - quotechar: CSV quote character (default: '"')
         - skip_header: Number of lines to skip, or boolean
         - generate_bad_file: Whether to generate a .bad file for corrupted rows (default: true)
+        - truncstring: Whether to truncate string values based on column definition (default: false)
+        - lfinstring: Whether to handle unescaped linefeed in the row (default: false)
+        - ctrlchars: Whether to escape special characters in the string (default: false)
     """
 
     def __init__(self, fdw_options, fdw_columns):
@@ -93,6 +96,9 @@ class S3Fdw(ForeignDataWrapper):
         self.skip_header = self.parse_header_option(fdw_options)
         
         self.generate_bad_file = self.parse_bool_option(fdw_options.get("generate_bad_file", "true"))
+        self.truncstring = self.parse_bool_option(fdw_options.get("truncstring", "false"))
+        self.lfinstring = self.parse_bool_option(fdw_options.get("lfinstring", "false"))
+        self.ctrlchars = self.parse_bool_option(fdw_options.get("ctrlchars", "false"))
         
         self.columns = fdw_columns
 
@@ -170,7 +176,7 @@ class S3Fdw(ForeignDataWrapper):
 
             count = 0
             checked = False
-            bad_rows = []  # Store bad rows only if generate_bad_file is true
+            bad_rows = []  # Store bad rows if generate_bad_file is true
             
             for line in reader:
                 if count >= self.skip_header:
@@ -178,17 +184,15 @@ class S3Fdw(ForeignDataWrapper):
                         checked = True
                         self.validate_columns(line)
                     
-                    # Validate the current row
-                    if len(line) < len(self.columns):
-                        log_to_postgres(f"Corrupted row found: {line}", WARNING)
-                        if self.generate_bad_file:  # Only store bad rows if this option is enabled
-                            bad_rows.append(line)
-                        continue  # Skip this row
+                    try:
+                        # Process the row according to the settings
+                        processed_row = self.process_row(line)
+                        yield processed_row  # Return valid rows to PostgreSQL
+                    except Exception as e:
+                        log_to_postgres(f"Error processing row: {line} -> {str(e)}", WARNING)
+                        if self.generate_bad_file:
+                            bad_rows.append(line)  # Add row to bad file if generation is enabled
 
-                    # Prepare the valid row
-                    row = line[:len(self.columns)]
-                    nulled_row = [v if v else None for v in row]
-                    yield nulled_row  # Return valid rows to PostgreSQL
                 count += 1
 
             # Handle bad rows
@@ -199,6 +203,32 @@ class S3Fdw(ForeignDataWrapper):
             log_to_postgres(f"Error reading CSV data: {str(e)}", ERROR)
             raise
 
+        def process_row(self, row):
+            """Process a row according to FDW options (truncstring, lfinstring, ctrlchars)."""
+            processed_row = []
+
+            for idx, value in enumerate(row):
+                col_name = list(self.columns.keys())[idx]
+                col_def = self.columns[col_name]
+
+                # Handle lfinstring
+                if self.lfinstring and '\n' in value:
+                    value = value.replace('\n', '\\n')
+
+                # Handle ctrlchars
+                if self.ctrlchars:
+                    value = value.replace('\t', '\\t').replace('\r', '\\r').replace('\n', '\\n')
+
+                # Handle truncstring
+                if self.truncstring and 'type_name' in col_def:
+                    if col_def['type_name'] in ('character varying', 'varchar', 'character', 'char'):
+                        max_len = col_def.get('type_modifier', -1)
+                        if max_len > 0 and len(value) > max_len:
+                            value = value[:max_len]
+
+                processed_row.append(value if value else None)
+
+            return processed_row
 
     def write_bad_file(self, bad_rows):
         """Write bad rows to a .bad file and upload it to S3."""
