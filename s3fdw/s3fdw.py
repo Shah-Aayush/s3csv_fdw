@@ -206,9 +206,9 @@ class S3Fdw(ForeignDataWrapper):
             log_to_postgres(f"Error reading CSV data: {str(e)}", ERROR)
             raise
 
-        def process_row(self, row):
-            """Process a row according to FDW options (truncstring, lfinstring, ctrlchars)."""
-            processed_row = []
+    def process_row(self, row):
+        """Process a row according to FDW options (truncstring, lfinstring, ctrlchars)."""
+        processed_row = []
 
         for idx in range(len(self.columns)):
             try:
@@ -266,10 +266,9 @@ class S3Fdw(ForeignDataWrapper):
         finally:
             wrapper.close()  # Properly close the wrapper to release resources
 
-
     def validate_columns(self, line):
         """Validate CSV columns against table definition"""
         if len(line) > len(self.columns):
             log_to_postgres("CSV file has more columns than defined in the table", WARNING)
-        if len(line) < len(self.columns):
+        elif len(line) < len(self.columns):
             log_to_postgres("CSV file has fewer columns than defined in the table", WARNING)
