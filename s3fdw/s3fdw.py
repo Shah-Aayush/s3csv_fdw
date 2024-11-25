@@ -183,17 +183,22 @@ class S3Fdw(ForeignDataWrapper):
                     if not checked:
                         checked = True
                         self.validate_columns(line)
-                    
+
                     try:
-                        # Process the row according to the settings
+                        # Process the row and yield it
                         processed_row = self.process_row(line)
-                        yield processed_row  # Return valid rows to PostgreSQL
+                        yield processed_row
                     except Exception as e:
+                        # Log the specific error for the row
                         log_to_postgres(f"Error processing row: {line} -> {str(e)}", WARNING)
+                        
+                        # Add the corrupted row to bad rows if generation is enabled
                         if self.generate_bad_file:
-                            bad_rows.append(line)  # Add row to bad file if generation is enabled
+                            bad_rows.append(line)
 
                 count += 1
+
+
 
             # Handle bad rows
             if self.generate_bad_file and bad_rows:
@@ -207,28 +212,32 @@ class S3Fdw(ForeignDataWrapper):
             """Process a row according to FDW options (truncstring, lfinstring, ctrlchars)."""
             processed_row = []
 
-            for idx, value in enumerate(row):
+        for idx in range(len(self.columns)):
+            try:
+                value = row[idx] if idx < len(row) else None  # Handle missing columns gracefully
                 col_name = list(self.columns.keys())[idx]
                 col_def = self.columns[col_name]
 
-                # Handle lfinstring
-                if self.lfinstring and '\n' in value:
-                    value = value.replace('\n', '\\n')
+                # Handle truncstring, lfinstring, and ctrlchars
+                if value is not None:
+                    if self.lfinstring and '\n' in value:
+                        value = value.replace('\n', '\\n')
 
-                # Handle ctrlchars
-                if self.ctrlchars:
-                    value = value.replace('\t', '\\t').replace('\r', '\\r').replace('\n', '\\n')
+                    if self.ctrlchars:
+                        value = value.replace('\t', '\\t').replace('\r', '\\r').replace('\n', '\\n')
 
-                # Handle truncstring
-                if self.truncstring and 'type_name' in col_def:
-                    if col_def['type_name'] in ('character varying', 'varchar', 'character', 'char'):
-                        max_len = col_def.get('type_modifier', -1)
-                        if max_len > 0 and len(value) > max_len:
-                            value = value[:max_len]
+                    if self.truncstring and 'type_name' in col_def:
+                        if col_def['type_name'] in ('character varying', 'varchar', 'character', 'char'):
+                            max_len = col_def.get('type_modifier', -1)
+                            if max_len > 0 and len(value) > max_len:
+                                value = value[:max_len]
 
-                processed_row.append(value if value else None)
+                processed_row.append(value)
+            except Exception as e:
+                raise ValueError(f"Column processing error at index {idx}: {str(e)}")
 
-            return processed_row
+        return processed_row
+
 
     def write_bad_file(self, bad_rows):
         """Write bad rows to a .bad file and upload it to S3."""
