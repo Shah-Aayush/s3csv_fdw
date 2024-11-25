@@ -224,10 +224,13 @@ class S3Fdw(ForeignDataWrapper):
                     if self.ctrlchars:
                         value = value.replace('\t', '\\t').replace('\r', '\\r').replace('\n', '\\n')
 
-                    if self.truncstring and 'type_name' in col_def:
-                        max_len = col_def.get('type_modifier', -1)
-                        if max_len > 0 and len(value) > max_len:
-                            value = value[:max_len]
+                    # Check for type_name and type_modifier in col_def if it's a ColumnDefinition object
+                    if hasattr(col_def, 'type_name') and hasattr(col_def, 'type_modifier'):
+                        # Truncate string if necessary based on type_modifier
+                        if self.truncstring:
+                            max_len = col_def.type_modifier if col_def.type_modifier > 0 else -1
+                            if max_len > 0 and len(value) > max_len:
+                                value = value[:max_len]
 
                 processed_row.append(value)
             except Exception as e:
@@ -235,6 +238,7 @@ class S3Fdw(ForeignDataWrapper):
                 log_to_postgres(f"Error processing column {idx} for row {row}: {str(e)}", WARNING)
                 raise  # Re-raise the error to make sure the row gets logged as bad
         return processed_row
+
 
     def write_bad_file(self, bad_rows):
         """Write bad rows to a .bad file and upload it to S3."""
