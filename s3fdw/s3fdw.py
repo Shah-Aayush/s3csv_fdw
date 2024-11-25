@@ -195,13 +195,20 @@ class S3Fdw(ForeignDataWrapper):
 
     def write_bad_file(self, bad_rows):
         """Write bad rows to a .bad file and upload it to S3."""
-        bad_filename = f"{self.filename}.bad"
+        # Generate a timestamp for the bad file name
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]  # Format: YYYYMMDDHHMMSSmmm
+        random_part = f"{random.randint(10000000, 99999999)}"  # Generate random part
+        bad_filename = (
+            f"{self.filename}.{timestamp}.{random_part}.bad"
+        )
+
         bad_stream = BytesIO()
         wrapper = TextIOWrapper(bad_stream, encoding='utf-8')
         writer = csv.writer(
             wrapper,
             delimiter=self.delimiter,
-            quotechar=self.quotechar
+            quotechar=self.quotechar,
+            quoting=csv.QUOTE_ALL  # Ensure all values are quoted
         )
         writer.writerows(bad_rows)
         wrapper.flush()  # Ensure all data is written to the BytesIO stream
