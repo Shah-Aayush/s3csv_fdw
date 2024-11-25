@@ -9,6 +9,7 @@ import csv
 from io import BytesIO, TextIOWrapper
 from botocore.client import Config
 from datetime import datetime
+import random
 
 
 # In at least some cases, bucket names are required to follow subdomain.domain
