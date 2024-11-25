@@ -232,6 +232,10 @@ class S3Fdw(ForeignDataWrapper):
                             if max_len > 0 and len(value) > max_len:
                                 value = value[:max_len]
 
+                    # If the column is supposed to be BIGINT, convert empty strings to None
+                    if col_def.type_name == 'bigint' and value == '':
+                        value = None  # Set empty string to None (NULL in SQL)
+
                 processed_row.append(value)
             except Exception as e:
                 # Add more detailed logging here to trace the exact issue
