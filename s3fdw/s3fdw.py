@@ -198,8 +198,6 @@ class S3Fdw(ForeignDataWrapper):
 
                 count += 1
 
-
-
             # Handle bad rows
             if self.generate_bad_file and bad_rows:
                 self.write_bad_file(bad_rows)
@@ -227,17 +225,16 @@ class S3Fdw(ForeignDataWrapper):
                         value = value.replace('\t', '\\t').replace('\r', '\\r').replace('\n', '\\n')
 
                     if self.truncstring and 'type_name' in col_def:
-                        if col_def['type_name'] in ('character varying', 'varchar', 'character', 'char'):
-                            max_len = col_def.get('type_modifier', -1)
-                            if max_len > 0 and len(value) > max_len:
-                                value = value[:max_len]
+                        max_len = col_def.get('type_modifier', -1)
+                        if max_len > 0 and len(value) > max_len:
+                            value = value[:max_len]
 
                 processed_row.append(value)
             except Exception as e:
-                raise ValueError(f"Column processing error at index {idx}: {str(e)}")
-
+                # Add more detailed logging here to trace the exact issue
+                log_to_postgres(f"Error processing column {idx} for row {row}: {str(e)}", WARNING)
+                raise  # Re-raise the error to make sure the row gets logged as bad
         return processed_row
-
 
     def write_bad_file(self, bad_rows):
         """Write bad rows to a .bad file and upload it to S3."""
@@ -265,7 +262,7 @@ class S3Fdw(ForeignDataWrapper):
             s3.upload_fileobj(bad_stream, self.bucket, bad_filename)
             log_to_postgres(f"Bad rows written to {bad_filename} and uploaded to S3", DEBUG)
         except Exception as e:
-            log_to_postgres(f"Failed to upload .bad file to S3: {str(e)}", ERROR)
+            log_to_postgres(f"Failed to upload bad file {bad_filename} to S3: {str(e)}", ERROR)
         finally:
             wrapper.close()  # Properly close the wrapper to release resources
 
