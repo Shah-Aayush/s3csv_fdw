@@ -197,13 +197,15 @@ class S3Fdw(ForeignDataWrapper):
         """Write bad rows to a .bad file and upload it to S3."""
         bad_filename = f"{self.filename}.bad"
         bad_stream = BytesIO()
+        wrapper = TextIOWrapper(bad_stream, encoding='utf-8')
         writer = csv.writer(
-            TextIOWrapper(bad_stream, encoding='utf-8'),
+            wrapper,
             delimiter=self.delimiter,
             quotechar=self.quotechar
         )
         writer.writerows(bad_rows)
-        bad_stream.seek(0)
+        wrapper.flush()  # Ensure all data is written to the BytesIO stream
+        bad_stream.seek(0)  # Rewind the stream to the beginning for uploading
 
         try:
             s3 = self.get_s3_client()
@@ -211,6 +213,9 @@ class S3Fdw(ForeignDataWrapper):
             log_to_postgres(f"Bad rows written to {bad_filename} and uploaded to S3", DEBUG)
         except Exception as e:
             log_to_postgres(f"Failed to upload .bad file to S3: {str(e)}", ERROR)
+        finally:
+            wrapper.close()  # Properly close the wrapper to release resources
+
 
     def validate_columns(self, line):
         """Validate CSV columns against table definition"""
