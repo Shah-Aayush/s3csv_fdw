@@ -371,15 +371,23 @@ class S3Fdw(ForeignDataWrapper):
                 converted_value = float(value)
             
             elif 'varchar' in col_type or 'char' in col_type or 'text' in col_type:
+                # Handle lfinstring flag
+                if self.lfinstring:
+                    value = value.replace('\n', '\\n')
+                
+                # Escape control characters
+                if self.ctrlchars:
+                    value = re.sub(r'[\x00-\x1F\x7F]', lambda m: f'\\{ord(m.group(0)):03o}', value)
+                
                 # Truncate if necessary
-                if max_length:
+                if self.trunc_col and max_length:
                     value = value[:max_length]
                 
-                # Remove non-printable characters
-                converted_value = ''.join(
-                    char for char in value 
-                    if char in string.printable
-                )
+                # # Remove non-printable characters
+                # converted_value = ''.join(
+                #     char for char in value 
+                #     if char in string.printable
+                # )
             
             elif 'date' in col_type:
                 # Attempt various date parsing
