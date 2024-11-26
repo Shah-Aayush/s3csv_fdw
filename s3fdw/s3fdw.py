@@ -222,6 +222,9 @@ class S3Fdw(ForeignDataWrapper):
                 # Debug log column information
                 log_to_postgres(f"Processing column {idx} ({col_name}) with value: {value}", WARNING)
                 log_to_postgres(f"Column definition: {col_def}", WARNING)
+                log_to_postgres(f"Column definition (col_def) for column {col_name}: {repr(col_def)}", WARNING)
+                log_to_postgres(f"Type of col_def for column {col_name}: {type(col_def)}", WARNING)
+                log_to_postgres(f"Attributes of col_def for column {col_name}: {dir(col_def)}", WARNING)
 
                 # Handle truncstring, lfinstring, and ctrlchars
                 if value is not None:
@@ -236,9 +239,9 @@ class S3Fdw(ForeignDataWrapper):
                     # Check for type_name and type_modifier in col_def if it's a ColumnDefinition object
                     if self.truncstring and value is not None:
                         log_to_postgres(f"truncstring is {self.truncstring}", WARNING)
+                        log_to_postgres(f"Column definition (col_def) for column {col_name}: {repr(col_def)}", WARNING)
                         max_len = type_modifier if type_modifier > 0 else -1
                         log_to_postgres(f"Truncation check: column {col_name}, max length: {max_len}, current value length: {len(value)}", WARNING)
-                        log_to_postgres(f"Column definition (col_def) for column {col_name}: {repr(col_def)}", WARNING)
                         if max_len > 0 and len(value) > max_len:
                             value = value[:max_len]
                             log_to_postgres(f"Truncated value for column {col_name}: {repr(value)}", WARNING)
