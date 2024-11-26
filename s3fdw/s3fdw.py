@@ -107,13 +107,13 @@ class S3Fdw(ForeignDataWrapper):
         self.column_info = {}
         for col_name, col_def in fdw_columns.items():
             # Store column type and length information
-            type_info = col_def.get('type_name', '').lower()
+            type_info = getattr(col_def, 'type_name', '').lower()  # Safely fetch the attribute
             
             # Extract max length for string-like types
             max_length = None
             if 'varchar' in type_info or 'char' in type_info:
                 # Extract length from type definition
-                match = re.search(r'\((\d+)\)', str(col_def))
+                match = re.search(r'\((\d+)\)', col_def.type_name)
                 if match:
                     max_length = int(match.group(1))
             
@@ -121,7 +121,7 @@ class S3Fdw(ForeignDataWrapper):
                 'type': type_info,
                 'max_length': max_length,
                 # Flag to indicate if column is critical (cannot be null)
-                'required': col_def.get('not_null', False)
+                'required': getattr(col_def, 'not_null', False)  # Use getattr for optional attributes
             }
 
     def validate_required_options(self, options):
