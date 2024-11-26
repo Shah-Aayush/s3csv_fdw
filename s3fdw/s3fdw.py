@@ -211,39 +211,54 @@ class S3Fdw(ForeignDataWrapper):
         """Process a row according to FDW options (truncstring, lfinstring, ctrlchars)."""
         processed_row = []
 
+        log_to_postgres(f"Starting process_row with input row: {row}", WARNING)
+
         for idx in range(len(self.columns)):
             try:
                 value = row[idx] if idx < len(row) else None  # Handle missing columns gracefully
                 col_name = list(self.columns.keys())[idx]
                 col_def = self.columns[col_name]
+                
+                # Debug log column information
+                log_to_postgres(f"Processing column {idx} ({col_name}) with value: {value}", WARNING)
+                log_to_postgres(f"Column definition: {col_def}", WARNING)
 
                 # Handle truncstring, lfinstring, and ctrlchars
                 if value is not None:
                     if self.lfinstring and '\n' in value:
+                        log_to_postgres(f"lfinstring is enabled, replacing '\\n' in value: {value}", WARNING)
                         value = value.replace('\n', '\\n')
 
                     if self.ctrlchars:
+                        log_to_postgres(f"ctrlchars is enabled, escaping control characters in value: {value}", WARNING)
                         value = value.replace('\t', '\\t').replace('\r', '\\r').replace('\n', '\\n')
 
                     # Check for type_name and type_modifier in col_def if it's a ColumnDefinition object
                     if hasattr(col_def, 'type_name') and hasattr(col_def, 'type_modifier'):
-                        # Truncate string if necessary based on type_modifier
                         if self.truncstring:
                             max_len = col_def.type_modifier if col_def.type_modifier > 0 else -1
                             if max_len > 0 and len(value) > max_len:
+                                log_to_postgres(f"truncstring is enabled, truncating value '{value}' to max length {max_len}", WARNING)
                                 value = value[:max_len]
 
                     # Handle empty string for non-VARCHAR columns by converting to None (NULL)
                     if value == "":
-                        if col_def.type_name != 'character varying' and col_def.type_name != 'text':
-                            value = None  # Convert empty strings to None for non-VARCHAR columns
-                        # For VARCHAR, we keep empty string if it's intended
+                        if col_def.type_name not in ('character varying', 'text'):
+                            log_to_postgres(f"Converting empty string to NULL for column {col_name}", WARNING)
+                            value = None
+                        else:
+                            log_to_postgres(f"Empty string retained for VARCHAR column {col_name}", WARNING)
 
+                # Add processed value to the row
                 processed_row.append(value)
+                log_to_postgres(f"Processed value for column {col_name}: {value}", WARNING)
+
             except Exception as e:
-                # Add more detailed logging here to trace the exact issue
-                log_to_postgres(f"Error processing column {idx} for row {row}: {str(e)}", WARNING)
-                raise  # Re-raise the error to make sure the row gets logged as bad
+                # Log detailed error and re-raise for higher-level handling
+                log_to_postgres(f"Error processing column {idx} ({col_name}) for row {row}: {str(e)}", WARNING)
+                raise
+
+        log_to_postgres(f"Finished processing row. Processed row: {processed_row}", WARNING)
         return processed_row
 
 
@@ -271,7 +286,7 @@ class S3Fdw(ForeignDataWrapper):
         try:
             s3 = self.get_s3_client()
             s3.upload_fileobj(bad_stream, self.bucket, bad_filename)
-            log_to_postgres(f"Bad rows written to {bad_filename} and uploaded to S3", DEBUG)
+            log_to_postgres(f"Bad rows written to {bad_filename} and uploaded to S3", WARNING)
         except Exception as e:
             log_to_postgres(f"Failed to upload bad file {bad_filename} to S3: {str(e)}", ERROR)
         finally:
