@@ -235,11 +235,16 @@ class S3Fdw(ForeignDataWrapper):
 
                     # Check for type_name and type_modifier in col_def if it's a ColumnDefinition object
                     if hasattr(col_def, 'type_name') and hasattr(col_def, 'type_modifier'):
+                        log_to_postgres(f"truncstring is {self.truncstring}", WARNING)
                         if self.truncstring:
                             max_len = col_def.type_modifier if col_def.type_modifier > 0 else -1
+                            log_to_postgres(f"Truncation check: column {col_name}, max length: {max_len}, current value length: {len(value)}", WARNING)
                             if max_len > 0 and len(value) > max_len:
-                                log_to_postgres(f"truncstring is enabled, truncating value '{value}' to max length {max_len}", WARNING)
                                 value = value[:max_len]
+                                log_to_postgres(f"Truncated value for column {col_name}: {repr(value)}", WARNING)
+                    else:
+                        log_to_postgres("in hasattr condition else part", WARNING)
+
 
                     # Handle empty string for non-VARCHAR columns by converting to None (NULL)
                     if value == "":
