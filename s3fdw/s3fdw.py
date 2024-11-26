@@ -182,9 +182,10 @@ class S3Fdw(ForeignDataWrapper):
                 if count >= self.skip_header:
                     if not checked:
                         checked = True
-                        self.validate_columns(line)
+                       
 
                     try:
+                        self.validate_columns(line)
                         # Process the row and yield it
                         processed_row = self.process_row(line)
                         yield processed_row
@@ -277,8 +278,17 @@ class S3Fdw(ForeignDataWrapper):
             wrapper.close()  # Properly close the wrapper to release resources
 
     def validate_columns(self, line):
-        """Validate CSV columns against table definition"""
-        if len(line) > len(self.columns):
-            log_to_postgres("CSV file has more columns than defined in the table", WARNING)
-        elif len(line) < len(self.columns):
-            log_to_postgres("CSV file has fewer columns than defined in the table", WARNING)
+        """
+        Validate CSV columns against the table definition.
+
+        :param line: A list representing a row in the CSV file.
+        :raises Exception: If the row does not match the table column count.
+        """
+        if len(line) != len(self.columns):
+            log_message = (
+                f"Corrupted row: Expected {len(self.columns)} columns, "
+                f"but got {len(line)}. Row content: {line}"
+            )
+            log_to_postgres(log_message, WARNING)
+            raise Exception(log_message)
+
