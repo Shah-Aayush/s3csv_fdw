@@ -11,7 +11,9 @@ from botocore.client import Config
 from datetime import datetime
 import random
 import re
-import ssl
+import string
+import traceback
+
 
 
 # In at least some cases, bucket names are required to follow subdomain.domain
@@ -111,13 +113,15 @@ class S3Fdw(ForeignDataWrapper):
             max_length = None
             if 'varchar' in type_info or 'char' in type_info:
                 # Extract length from type definition
-                match = re.search(r'\((\d+)\)', type_def)
+                match = re.search(r'\((\d+)\)', str(col_def))
                 if match:
                     max_length = int(match.group(1))
             
             self.column_info[col_name] = {
                 'type': type_info,
-                'max_length': max_length
+                'max_length': max_length,
+                # Flag to indicate if column is critical (cannot be null)
+                'required': col_def.get('not_null', False)
             }
 
     def validate_required_options(self, options):
@@ -179,15 +183,11 @@ class S3Fdw(ForeignDataWrapper):
             s3 = self.get_s3_client()
             
             stream = BytesIO()
-            try:
-                s3.download_fileobj(self.bucket, self.filename, stream)
-            except Exception as e:
-                log_to_postgres(f"Failed to download file {self.filename} from bucket {self.bucket}: {str(e)}", ERROR)
-                raise
+            s3.download_fileobj(self.bucket, self.filename, stream)
             
             stream.seek(0)
             reader = csv.reader(
-                TextIOWrapper(stream, encoding='utf-8'),
+                TextIOWrapper(stream, encoding='utf-8', errors='replace'),
                 delimiter=self.delimiter,
                 quotechar=self.quotechar
             )
@@ -197,44 +197,39 @@ class S3Fdw(ForeignDataWrapper):
             
             for line in reader:
                 if count >= self.skip_header:
-                    # Process and validate each row
+                    # Capture full error details
+                    row_error = None
                     processed_row = []
-                    row_is_valid = True
 
-                    for value, col_name in zip(line, self.columns):
-                        # Validate and convert each column
-                        try:
-                            converted_value = self.validate_and_convert_value(value, col_name)
-                            
-                            if converted_value is None:
-                                row_is_valid = False
-                                break
-                            
-                            processed_row.append(converted_value)
-                        
-                        except Exception as e:
-                            log_to_postgres(
-                                f"Error processing column {col_name}: {str(e)}", 
-                                WARNING
-                            )
-                            row_is_valid = False
-                            break
-                    
-                    # Yield only valid rows
-                    if row_is_valid:
-                        yield processed_row
-                    else:
+                    # Ensure we have enough columns
+                    if len(line) < len(self.columns):
+                        row_error = f"Insufficient columns. Expected {len(self.columns)}, got {len(line)}"
                         if self.generate_bad_file:
+                            bad_rows.append(line)
+                        continue
+
+                    try:
+                        # Process each column
+                        for value, col_name in zip(line, self.columns):
+                            cleaned_value = self.clean_and_validate_value(value, col_name)
+                            processed_row.append(cleaned_value)
+                        
+                        # If we get here, row is fully processed
+                        yield processed_row
+
+                    except Exception as e:
+                        # Capture detailed error information
+                         if self.generate_bad_file:
                             bad_rows.append(line)
 
                 count += 1
 
-            # Handle bad rows
+            # Handle bad rows - write to detailed bad file
             if self.generate_bad_file and bad_rows:
                 self.write_bad_file(bad_rows)
 
         except Exception as e:
-            log_to_postgres(f"Error reading CSV data: {str(e)}", ERROR)
+            log_to_postgres(f"Critical error reading CSV data: {str(e)}", ERROR)
             raise
 
 
@@ -334,3 +329,81 @@ class S3Fdw(ForeignDataWrapper):
                     WARNING
                 )
                 return None
+    def clean_and_validate_value(self, value, col_name):
+        """
+        Comprehensive value cleaning and validation
+        """
+        # Handle None or empty value
+        if value is None or value == '':
+            # Check if column is required
+            if self.column_info[col_name].get('required', False):
+                raise ValueError(f"Required column {col_name} cannot be null")
+            return None
+
+        # Remove any leading/trailing whitespace and newlines
+        value = str(value).strip()
+
+        # If still empty after stripping, return None
+        if not value:
+            if self.column_info[col_name].get('required', False):
+                raise ValueError(f"Required column {col_name} cannot be empty")
+            return None
+
+        col_type = self.column_info[col_name]['type']
+        max_length = self.column_info[col_name]['max_length']
+
+        try:
+            # Handle different type conversions
+            if 'int' in col_type or 'bigint' in col_type:
+                # Remove any non-numeric characters except minus sign
+                value = re.sub(r'[^\-0-9]', '', value)
+                # Convert to integer
+                if not value:
+                    raise ValueError(f"Invalid integer value for {col_name}")
+                converted_value = int(value)
+            
+            elif 'numeric' in col_type or 'decimal' in col_type or 'float' in col_type:
+                # Remove any non-numeric characters except decimal point and minus sign
+                value = re.sub(r'[^\-0-9.]', '', value)
+                # Convert to float
+                if not value:
+                    raise ValueError(f"Invalid numeric value for {col_name}")
+                converted_value = float(value)
+            
+            elif 'varchar' in col_type or 'char' in col_type or 'text' in col_type:
+                # Truncate if necessary
+                if max_length:
+                    value = value[:max_length]
+                
+                # Remove non-printable characters
+                converted_value = ''.join(
+                    char for char in value 
+                    if char in string.printable
+                )
+            
+            elif 'date' in col_type:
+                # Attempt various date parsing
+                date_formats = [
+                    '%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%Y/%m/%d', 
+                    '%d/%m/%Y', '%m-%d-%Y', '%Y-%m-%dT%H:%M:%S', 
+                    '%Y-%m-%d %H:%M:%S'
+                ]
+                
+                for fmt in date_formats:
+                    try:
+                        converted_value = datetime.strptime(value, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    raise ValueError(f"Unable to parse date for {col_name}")
+            
+            else:
+                # Default: keep as string
+                converted_value = value
+
+            return converted_value
+
+        except Exception as e:
+            # Wrap and re-raise with more context
+            raise ValueError(f"Error converting {col_name}: {str(e)}")
