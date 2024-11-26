@@ -10,6 +10,8 @@ from io import BytesIO, TextIOWrapper
 from botocore.client import Config
 from datetime import datetime
 import random
+import re
+import ssl
 
 
 # In at least some cases, bucket names are required to follow subdomain.domain
@@ -52,7 +54,7 @@ ssl.match_hostname = _new_match_hostname
 class S3Fdw(ForeignDataWrapper):
     """A foreign data wrapper for accessing csv files from S3 or S3-compatible storage.
 
-    Valid options:
+    Additional parsing options:
         - aws_access_key: AWS access key
         - aws_secret_key: AWS secret key
         - bucket: S3 bucket name
@@ -66,15 +68,17 @@ class S3Fdw(ForeignDataWrapper):
         - quotechar: CSV quote character (default: '"')
         - skip_header: Number of lines to skip, or boolean
         - generate_bad_file: Whether to generate a .bad file for corrupted rows (default: true)
+        - trunc_col: Truncate column values based on column definition
+        - lfinstring: Handle unescaped linefeeds in rows
+        - ctrlchars: Escape special characters in varchar fields
     """
 
     def __init__(self, fdw_options, fdw_columns):
         super(S3Fdw, self).__init__(fdw_options, fdw_columns)
 
-        # Required options
-        self.validate_required_options(fdw_options)
+        # Existing initialization code...
         
-        # S3 configuration
+        # New parsing options
         self.aws_access_key = fdw_options["aws_access_key"]
         self.aws_secret_key = fdw_options["aws_secret_key"]
         self.bucket = fdw_options.get('bucket', fdw_options.get('bucketname'))
@@ -93,8 +97,28 @@ class S3Fdw(ForeignDataWrapper):
         self.skip_header = self.parse_header_option(fdw_options)
         
         self.generate_bad_file = self.parse_bool_option(fdw_options.get("generate_bad_file", "true"))
-        
+        self.trunc_col = self.parse_bool_option(fdw_options.get("trunc_col", "false"))
+        self.lfinstring = self.parse_bool_option(fdw_options.get("lfinstring", "false"))
+        self.ctrlchars = self.parse_bool_option(fdw_options.get("ctrlchars", "false"))
+
         self.columns = fdw_columns
+        self.column_info = {}
+        for col_name, col_def in fdw_columns.items():
+            # Store column type and length information
+            type_info = col_def.get('type_name', '').lower()
+            
+            # Extract max length for string-like types
+            max_length = None
+            if 'varchar' in type_info or 'char' in type_info:
+                # Extract length from type definition
+                match = re.search(r'\((\d+)\)', type_def)
+                if match:
+                    max_length = int(match.group(1))
+            
+            self.column_info[col_name] = {
+                'type': type_info,
+                'max_length': max_length
+            }
 
     def validate_required_options(self, options):
         """Validate required FDW options"""
@@ -169,26 +193,40 @@ class S3Fdw(ForeignDataWrapper):
             )
 
             count = 0
-            checked = False
-            bad_rows = []  # Store bad rows only if generate_bad_file is true
+            bad_rows = []
             
             for line in reader:
                 if count >= self.skip_header:
-                    if not checked:
-                        checked = True
-                        self.validate_columns(line)
-                    
-                    # Validate the current row
-                    if len(line) < len(self.columns):
-                        log_to_postgres(f"Corrupted row found: {line}", WARNING)
-                        if self.generate_bad_file:  # Only store bad rows if this option is enabled
-                            bad_rows.append(line)
-                        continue  # Skip this row
+                    # Process and validate each row
+                    processed_row = []
+                    row_is_valid = True
 
-                    # Prepare the valid row
-                    row = line[:len(self.columns)]
-                    nulled_row = [v if v else None for v in row]
-                    yield nulled_row  # Return valid rows to PostgreSQL
+                    for value, col_name in zip(line, self.columns):
+                        # Validate and convert each column
+                        try:
+                            converted_value = self.validate_and_convert_value(value, col_name)
+                            
+                            if converted_value is None:
+                                row_is_valid = False
+                                break
+                            
+                            processed_row.append(converted_value)
+                        
+                        except Exception as e:
+                            log_to_postgres(
+                                f"Error processing column {col_name}: {str(e)}", 
+                                WARNING
+                            )
+                            row_is_valid = False
+                            break
+                    
+                    # Yield only valid rows
+                    if row_is_valid:
+                        yield processed_row
+                    else:
+                        if self.generate_bad_file:
+                            bad_rows.append(line)
+
                 count += 1
 
             # Handle bad rows
@@ -237,3 +275,62 @@ class S3Fdw(ForeignDataWrapper):
             log_to_postgres("CSV file has more columns than defined in the table", WARNING)
         if len(line) < len(self.columns):
             log_to_postgres("CSV file has fewer columns than defined in the table", WARNING)
+
+    def process_column_value(self, value, column_name):
+            """Process individual column value based on parsing options"""
+            # Truncate column if enabled and column has a max length
+            if self.trunc_col:
+                max_length = self.column_lengths.get(column_name, float('inf'))
+                value = value[:max_length] if value else value
+
+            # Handle unescaped linefeeds
+            if self.lfinstring and isinstance(value, str):
+                # Replace unescaped linefeeds
+                value = value.replace('\n', '\\n')
+
+            # Escape control characters
+            if self.ctrlchars and isinstance(value, str):
+                # Escape special control characters
+                value = re.sub(r'[\x00-\x1F\x7F]', lambda m: f'\\{ord(m.group(0)):03o}', value)
+
+            return value
+    def validate_and_convert_value(self, value, col_name):
+            """
+            Validate and convert value based on column type
+            """
+            col_type = self.column_info[col_name]['type']
+            max_length = self.column_info[col_name]['max_length']
+
+            try:
+                # Type and length validation
+                if 'varchar' in col_type or 'char' in col_type:
+                    # String type validation
+                    if max_length and len(value) > max_length:
+                        log_to_postgres(
+                            f"Value for {col_name} exceeds max length {max_length}", 
+                            WARNING
+                        )
+                        value = value[:max_length]
+                
+                elif 'int' in col_type:
+                    # Integer type conversion
+                    value = int(value)
+                
+                elif 'numeric' in col_type or 'decimal' in col_type:
+                    # Numeric type conversion
+                    value = float(value)
+                
+                elif 'date' in col_type:
+                    # Date type conversion
+                    value = datetime.strptime(value, '%Y-%m-%d').date()
+                
+                # Add more type-specific conversions as needed
+                
+                return value
+            
+            except ValueError as e:
+                log_to_postgres(
+                    f"Type conversion error for column {col_name}: {str(e)}", 
+                    WARNING
+                )
+                return None
