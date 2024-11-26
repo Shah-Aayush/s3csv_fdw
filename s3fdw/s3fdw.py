@@ -210,86 +210,54 @@ class S3Fdw(ForeignDataWrapper):
     def process_row(self, row):
         """Process a row according to FDW options (truncstring, lfinstring, ctrlchars)."""
         processed_row = []
+        columns = list(self.columns.items())  # Get column definitions once
 
-        log_to_postgres(f"Starting process_row with input row: {row}", WARNING)
-
-        for idx in range(len(self.columns)):
+        for idx, (col_name, col_def) in enumerate(columns):
             try:
                 value = row[idx] if idx < len(row) else None  # Handle missing columns gracefully
                 col_name = list(self.columns.keys())[idx]
                 col_def = self.columns[col_name]
 
-                # Log column information for debugging
-                log_to_postgres(f"Processing column {idx} ({col_name}) with value: {value}", WARNING)
-                log_to_postgres(f"Column definition: {col_def}", WARNING)
-                log_to_postgres(f"Column definition (col_def) for column {col_name}: {repr(col_def)}", WARNING)
-                log_to_postgres(f"Type of col_def for column {col_name}: {type(col_def)}", WARNING)
-                log_to_postgres(f"Attributes of col_def for column {col_name}: {dir(col_def)}", WARNING)
-
                 # Extract type_name and type_modifier from col_def safely
                 type_name = col_def.type_name if hasattr(col_def, 'type_name') else None
-                log_to_postgres(f"Extracted type_name: {type_name} for column {col_name}", WARNING)
 
-                # Manually extract type_modifier from type_name
+                # Extract type_modifier from type_name, if applicable
+                type_modifier = -1
                 if type_name and '(' in type_name and ')' in type_name:
                     try:
-                        # Extract the number from the parentheses
                         type_modifier = int(type_name.split('(')[1].split(')')[0])
-                        log_to_postgres(f"Manually extracted type_modifier: {type_modifier} from type_name: {type_name}", WARNING)
                     except ValueError:
-                        type_modifier = -1
-                        log_to_postgres(f"Failed to extract valid type_modifier from type_name: {type_name}", WARNING)
-                else:
-                    type_modifier = -1
+                        type_modifier = -1  # Fallback value if parsing fails
 
-                log_to_postgres(f"Final type_modifier: {type_modifier} for column {col_name}", WARNING)
-
-                # Handle truncstring, lfinstring, and ctrlchars if value is not None
+                # Process the value if not None
                 if value is not None:
                     # Handle line feed string
                     if self.lfinstring and '\n' in value:
-                        log_to_postgres(f"lfinstring is enabled, replacing '\\n' in value: {value}", WARNING)
                         value = value.replace('\n', '\\n')
 
                     # Handle control characters
                     if self.ctrlchars:
-                        log_to_postgres(f"ctrlchars is enabled, escaping control characters in value: {value}", WARNING)
                         value = value.replace('\t', '\\t').replace('\r', '\\r').replace('\n', '\\n')
 
-                    # Apply truncation logic only for string types (e.g., 'character varying', 'text')
+                    # Apply truncation logic for string types
                     if type_name and ('character varying' in type_name or 'text' in type_name):
-                        if type_modifier > 0:
-                            log_to_postgres(f"truncstring is {self.truncstring}", WARNING)
-                            log_to_postgres(f"Truncation check for column {col_name}: max length = {type_modifier}, value = {repr(value)}", WARNING)
-
-                            # Apply truncation if necessary
-                            if self.truncstring and len(value) > type_modifier:
-                                value = value[:type_modifier]  # Truncate value
-                                log_to_postgres(f"Truncated value for column {col_name}: {repr(value)}", WARNING)
-                        else:
-                            log_to_postgres(f"No truncation applied for column {col_name} as type_modifier is {type_modifier}", WARNING)
-                    else:
-                        log_to_postgres(f"No truncation applied for non-string column {col_name} of type {type_name}", WARNING)
+                        if type_modifier > 0 and self.truncstring and len(value) > type_modifier:
+                            value = value[:type_modifier]  # Truncate value
 
                     # Handle empty string for non-VARCHAR columns by converting to None (NULL)
-                    if value == "":
-                        if col_def.type_name not in ('character varying', 'text'):
-                            log_to_postgres(f"Converting empty string to NULL for column {col_name}", WARNING)
-                            value = None
-                        else:
-                            log_to_postgres(f"Empty string retained for VARCHAR column {col_name}", WARNING)
+                    if value == "" and col_def.type_name not in ('character varying', 'text'):
+                        value = None
 
                 # Add processed value to the row
                 processed_row.append(value)
-                log_to_postgres(f"Processed value for column {col_name}: {value}", WARNING)
 
             except Exception as e:
                 # Log detailed error and re-raise for higher-level handling
                 log_to_postgres(f"Error processing column {idx} ({col_name}) for row {row}: {str(e)}", WARNING)
                 raise
 
-        log_to_postgres(f"Finished processing row. Processed row: {processed_row}", WARNING)
         return processed_row
+
 
 
 
