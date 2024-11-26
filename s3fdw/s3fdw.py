@@ -226,9 +226,13 @@ class S3Fdw(ForeignDataWrapper):
                 log_to_postgres(f"Type of col_def for column {col_name}: {type(col_def)}", WARNING)
                 log_to_postgres(f"Attributes of col_def for column {col_name}: {dir(col_def)}", WARNING)
 
-                # Ensure we have the 'type_name' attribute before using it
+                # Extract type_name and type_modifier from col_def safely
                 type_name = col_def.type_name if hasattr(col_def, 'type_name') else None
                 log_to_postgres(f"Extracted type_name: {type_name} for column {col_name}", WARNING)
+
+                # Extract type_modifier from the type_name if necessary
+                type_modifier = col_def.type_modifier if hasattr(col_def, 'type_modifier') else -1
+                log_to_postgres(f"Extracted type_modifier: {type_modifier} for column {col_name}", WARNING)
 
                 # Handle truncstring, lfinstring, and ctrlchars if value is not None
                 if value is not None:
@@ -244,16 +248,16 @@ class S3Fdw(ForeignDataWrapper):
 
                     # Apply truncation logic only for string types (e.g., 'character varying', 'text')
                     if type_name and ('character varying' in type_name or 'text' in type_name):
-                        type_modifier = col_def.type_modifier if hasattr(col_def, 'type_modifier') else -1
-                        log_to_postgres(f"Extracted type_modifier: {type_modifier} for column {col_name}", WARNING)
-
-                        if self.truncstring and value is not None:
+                        if type_modifier > 0:
                             log_to_postgres(f"truncstring is {self.truncstring}", WARNING)
                             log_to_postgres(f"Truncation check for column {col_name}: max length = {type_modifier}, value = {repr(value)}", WARNING)
 
-                            if type_modifier > 0 and len(value) > type_modifier:
+                            # Apply truncation if necessary
+                            if self.truncstring and len(value) > type_modifier:
                                 value = value[:type_modifier]  # Truncate value
                                 log_to_postgres(f"Truncated value for column {col_name}: {repr(value)}", WARNING)
+                        else:
+                            log_to_postgres(f"No truncation applied for column {col_name} as type_modifier is {type_modifier}", WARNING)
                     else:
                         log_to_postgres(f"No truncation applied for non-string column {col_name} of type {type_name}", WARNING)
 
@@ -276,6 +280,8 @@ class S3Fdw(ForeignDataWrapper):
 
         log_to_postgres(f"Finished processing row. Processed row: {processed_row}", WARNING)
         return processed_row
+
+
 
 
 
