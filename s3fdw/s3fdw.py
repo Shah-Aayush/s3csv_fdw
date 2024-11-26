@@ -271,24 +271,24 @@ class S3Fdw(ForeignDataWrapper):
         if len(line) < len(self.columns):
             log_to_postgres("CSV file has fewer columns than defined in the table", WARNING)
 
-    def process_column_value(self, value, column_name):
-            """Process individual column value based on parsing options"""
-            # Truncate column if enabled and column has a max length
-            if self.trunc_col:
-                max_length = self.column_lengths.get(column_name, float('inf'))
-                value = value[:max_length] if value else value
+    # def process_column_value(self, value, column_name):
+    #         """Process individual column value based on parsing options"""
+    #         # Truncate column if enabled and column has a max length
+    #         if self.trunc_col:
+    #             max_length = self.column_lengths.get(column_name, float('inf'))
+    #             value = value[:max_length] if value else value
 
-            # Handle unescaped linefeeds
-            if self.lfinstring and isinstance(value, str):
-                # Replace unescaped linefeeds
-                value = value.replace('\n', '\\n')
+    #         # Handle unescaped linefeeds
+    #         if self.lfinstring and isinstance(value, str):
+    #             # Replace unescaped linefeeds
+    #             value = value.replace('\n', '\\n')
 
-            # Escape control characters
-            if self.ctrlchars and isinstance(value, str):
-                # Escape special control characters
-                value = re.sub(r'[\x00-\x1F\x7F]', lambda m: f'\\{ord(m.group(0)):03o}', value)
+    #         # Escape control characters
+    #         if self.ctrlchars and isinstance(value, str):
+    #             # Escape special control characters
+    #             value = re.sub(r'[\x00-\x1F\x7F]', lambda m: f'\\{ord(m.group(0)):03o}', value)
 
-            return value
+    #         return value
     def validate_and_convert_value(self, value, col_name):
             """
             Validate and convert value based on column type
@@ -331,7 +331,7 @@ class S3Fdw(ForeignDataWrapper):
                 return None
     def clean_and_validate_value(self, value, col_name):
         """
-        Comprehensive value cleaning and validation
+        Comprehensive value cleaning and validation.
         """
         # Handle None or empty value
         if value is None or value == '':
@@ -361,7 +361,7 @@ class S3Fdw(ForeignDataWrapper):
                 if not value:
                     raise ValueError(f"Invalid integer value for {col_name}")
                 converted_value = int(value)
-            
+
             elif 'numeric' in col_type or 'decimal' in col_type or 'float' in col_type:
                 # Remove any non-numeric characters except decimal point and minus sign
                 value = re.sub(r'[^\-0-9.]', '', value)
@@ -369,18 +369,30 @@ class S3Fdw(ForeignDataWrapper):
                 if not value:
                     raise ValueError(f"Invalid numeric value for {col_name}")
                 converted_value = float(value)
-            
+
             elif 'varchar' in col_type or 'char' in col_type or 'text' in col_type:
                 # Truncate if necessary
-                if max_length:
+                if self.trunc_col and max_length:
                     value = value[:max_length]
-                
+
+                # Handle unescaped linefeeds
+                if self.lfinstring:
+                    value = value.replace('\n', '\\n')
+
+                # Escape control characters
+                if self.ctrlchars:
+                    value = re.sub(
+                        r'[\x00-\x1F\x7F]', 
+                        lambda m: f'\\{ord(m.group(0)):03o}', 
+                        value
+                    )
+
                 # Remove non-printable characters
                 converted_value = ''.join(
                     char for char in value 
                     if char in string.printable
                 )
-            
+
             elif 'date' in col_type:
                 # Attempt various date parsing
                 date_formats = [
@@ -397,12 +409,17 @@ class S3Fdw(ForeignDataWrapper):
                         continue
                 else:
                     raise ValueError(f"Unable to parse date for {col_name}")
-            
+
             else:
                 # Default: keep as string
                 converted_value = value
 
             return converted_value
+
+        except Exception as e:
+            # Wrap and re-raise with more context
+            raise ValueError(f"Error converting {col_name}: {str(e)}")
+
 
         except Exception as e:
             # Wrap and re-raise with more context
