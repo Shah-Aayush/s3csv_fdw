@@ -218,32 +218,35 @@ class S3Fdw(ForeignDataWrapper):
                 value = row[idx] if idx < len(row) else None  # Handle missing columns gracefully
                 col_name = list(self.columns.keys())[idx]
                 col_def = self.columns[col_name]
-                
-                # Debug log column information
+
+                # Log column information for debugging
                 log_to_postgres(f"Processing column {idx} ({col_name}) with value: {value}", WARNING)
                 log_to_postgres(f"Column definition: {col_def}", WARNING)
                 log_to_postgres(f"Column definition (col_def) for column {col_name}: {repr(col_def)}", WARNING)
                 log_to_postgres(f"Type of col_def for column {col_name}: {type(col_def)}", WARNING)
                 log_to_postgres(f"Attributes of col_def for column {col_name}: {dir(col_def)}", WARNING)
 
-                # Handle truncstring, lfinstring, and ctrlchars
+                # Ensure we have the 'type_name' attribute before using it
+                type_name = col_def.type_name if hasattr(col_def, 'type_name') else None
+                log_to_postgres(f"Extracted type_name: {type_name} for column {col_name}", WARNING)
+
+                # Handle truncstring, lfinstring, and ctrlchars if value is not None
                 if value is not None:
+                    # Handle line feed string
                     if self.lfinstring and '\n' in value:
                         log_to_postgres(f"lfinstring is enabled, replacing '\\n' in value: {value}", WARNING)
                         value = value.replace('\n', '\\n')
 
+                    # Handle control characters
                     if self.ctrlchars:
                         log_to_postgres(f"ctrlchars is enabled, escaping control characters in value: {value}", WARNING)
                         value = value.replace('\t', '\\t').replace('\r', '\\r').replace('\n', '\\n')
 
-                    # Check for type_name and type_modifier in col_def if it's a ColumnDefinition object
-                     # Proceed with truncation logic only for string types (e.g., 'character varying')
+                    # Apply truncation logic only for string types (e.g., 'character varying', 'text')
                     if type_name and ('character varying' in type_name or 'text' in type_name):
-                        # Extract type_modifier for string columns (e.g., varchar(20) -> type_modifier = 20)
                         type_modifier = col_def.type_modifier if hasattr(col_def, 'type_modifier') else -1
                         log_to_postgres(f"Extracted type_modifier: {type_modifier} for column {col_name}", WARNING)
 
-                        # Apply truncation if truncstring is enabled
                         if self.truncstring and value is not None:
                             log_to_postgres(f"truncstring is {self.truncstring}", WARNING)
                             log_to_postgres(f"Truncation check for column {col_name}: max length = {type_modifier}, value = {repr(value)}", WARNING)
@@ -273,6 +276,7 @@ class S3Fdw(ForeignDataWrapper):
 
         log_to_postgres(f"Finished processing row. Processed row: {processed_row}", WARNING)
         return processed_row
+
 
 
     def write_bad_file(self, bad_rows):
