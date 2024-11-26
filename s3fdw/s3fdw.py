@@ -230,9 +230,19 @@ class S3Fdw(ForeignDataWrapper):
                 type_name = col_def.type_name if hasattr(col_def, 'type_name') else None
                 log_to_postgres(f"Extracted type_name: {type_name} for column {col_name}", WARNING)
 
-                # Extract type_modifier from the type_name if necessary
-                type_modifier = col_def.type_modifier if hasattr(col_def, 'type_modifier') else -1
-                log_to_postgres(f"Extracted type_modifier: {type_modifier} for column {col_name}", WARNING)
+                # Manually extract type_modifier from type_name
+                if type_name and '(' in type_name and ')' in type_name:
+                    try:
+                        # Extract the number from the parentheses
+                        type_modifier = int(type_name.split('(')[1].split(')')[0])
+                        log_to_postgres(f"Manually extracted type_modifier: {type_modifier} from type_name: {type_name}", WARNING)
+                    except ValueError:
+                        type_modifier = -1
+                        log_to_postgres(f"Failed to extract valid type_modifier from type_name: {type_name}", WARNING)
+                else:
+                    type_modifier = -1
+
+                log_to_postgres(f"Final type_modifier: {type_modifier} for column {col_name}", WARNING)
 
                 # Handle truncstring, lfinstring, and ctrlchars if value is not None
                 if value is not None:
@@ -280,6 +290,7 @@ class S3Fdw(ForeignDataWrapper):
 
         log_to_postgres(f"Finished processing row. Processed row: {processed_row}", WARNING)
         return processed_row
+
 
 
 
