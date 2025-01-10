@@ -234,6 +234,9 @@ class S3Fdw(ForeignDataWrapper):
                     # Handle line feed string
                     if self.lfinstring and '\n' in value:
                         value = value.replace('\n', '\\n')
+                    
+                    if '\N' in value:
+                        value = value.replace('\N', '')
 
                     # Handle control characters
                     if self.ctrlchars:
